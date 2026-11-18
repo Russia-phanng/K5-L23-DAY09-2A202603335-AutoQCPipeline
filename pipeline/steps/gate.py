@@ -1,24 +1,66 @@
-"""BƯỚC 4 — Cửa chặn: quyết định Release / Hold / Rework.   ★
+"""Step — Quyết định Release / Hold / Rework dựa trên danh sách các Issue."""
 
-Test:  pytest tests/test_gate.py -q
+def decide(issues, stems, cfg=None, reviewed=None):
+    """Quyết định trạng thái Release / Hold / Rework cho lô dữ liệu."""
+    if cfg is None:
+        cfg = {}
+    if reviewed is None:
+        reviewed = set()
+    else:
+        reviewed = set(reviewed)
 
-Cây quyết định Day 07 (slide Day 09: "Lỗi bắt buộc chặn pipeline; lỗi cảnh báo chuyển người xem"):
+    stems_set = set(stems)
+    total_stems = len(stems_set)
 
-  còn ≥ 1 lỗi bắt buộc (severity ERROR)                          -> "Rework"
-  không còn lỗi bắt buộc, nhưng tỉ lệ ẢNH còn cảnh báo
-      >= cfg["gate"]["warn_ratio_hold"]                          -> "Hold"
-  còn lại                                                        -> "Release"
+    # 1. Đếm và thu thập lỗi ERROR (Lỗi error KHÔNG THỂ bị che khuất bởi reviewed)
+    errors = []
+    for i in issues:
+        severity = getattr(i, "severity", "error")
+        if severity == "error":
+            errors.append(i)
 
-Tỉ lệ cảnh báo = (số ẢNH khác nhau có ≥ 1 cảnh báo) / (tổng số ảnh).  Chú ý:
-- chỉ đếm issue có `image` nằm trong `image_stems` (bỏ "<dataset>", "data.yaml");
-- bỏ qua ảnh nằm trong `reviewed` (người đã xem, cảnh báo của ảnh đó coi như đã xử lý) — nhưng LỖI BẮT BUỘC thì không bao giờ được bỏ qua;
-- mẫu số là số ảnh, không phải số issue.
+    n_errors = len(errors)
+    reasons = [str(e) for e in errors]
 
-Trả về dict: decision, n_errors, n_warn_images, n_images, warn_ratio (làm tròn 4 chữ số), reasons (list[str], giải thích bằng tiếng Việt, có số liệu).
-"""
-from ..common import ERROR, WARN  # noqa: F401
+    if n_errors > 0:
+        return {
+            "decision": "Rework",
+            "reason": "Phát hiện lỗi nghiêm trọng (ERROR)",
+            "reasons": reasons,
+            "n_errors": n_errors,
+            "n_warn_images": 0,
+            "warn_ratio": 0.0,
+            "n_images": total_stems
+        }
 
+    # 2. Xử lý cảnh báo WARNING (Warning có thể được miễn giảm nếu ảnh thuộc reviewed)
+    warn_images = set()
+    for i in issues:
+        severity = getattr(i, "severity", "warn")
+        if severity == "warn":
+            img = getattr(i, "image", None)
+            if img == "<dataset>" or img == "data.yaml" or (img in stems_set and img not in reviewed):
+                if img in stems_set:
+                    warn_images.add(img)
 
-def decide(issues, image_stems, cfg, reviewed=frozenset()):
-    # TODO
-    raise NotImplementedError("gate chưa làm")
+    n_warn_images = len(warn_images)
+    warn_ratio = (n_warn_images / total_stems) if total_stems > 0 else 0.0
+    
+    warn_ratio_threshold = cfg.get("gate", {}).get("warn_ratio", 0.1)
+
+    if warn_ratio >= warn_ratio_threshold:
+        decision = "Hold"
+        reason = f"Tỷ lệ ảnh cảnh báo ({n_warn_images}/{total_stems} = {warn_ratio:.1%}) vượt ngưỡng cho phép"
+    else:
+        decision = "Release"
+        reason = "Dữ liệu đạt chuẩn"
+
+    return {
+        "decision": decision,
+        "reason": reason,
+        "reasons": [],
+        "n_errors": 0,
+        "n_warn_images": n_warn_images,
+        "warn_ratio": warn_ratio,
+        "n_images": total_stems
+    }
